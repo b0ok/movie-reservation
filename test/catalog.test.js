@@ -70,6 +70,32 @@ test('admins can update a movie and its genres', async () => {
   assert.equal((await api('GET', '/api/movies?genre=mystery')).body.total, 0);
 });
 
+test('admins can toggle a movie into Now Playing', async () => {
+  const on = await api('PATCH', `/api/movies/${movieId}`, { token: adminToken, body: { now_playing: 1 } });
+  assert.equal(on.status, 200);
+  assert.equal(on.body.now_playing, 1);
+  assert.equal((await api('PATCH', `/api/movies/${movieId}`, { token: adminToken, body: { now_playing: 2 } })).status, 400);
+  assert.equal((await api('PATCH', `/api/movies/${movieId}`, { token: userToken, body: { now_playing: 0 } })).status, 403);
+  assert.equal((await api('PATCH', `/api/movies/${movieId}`, { token: adminToken, body: { now_playing: 0 } })).body.now_playing, 0);
+});
+
+test('reviews: admin writes, updates and deletes one per film; everyone can read', async () => {
+  const url = `/api/movies/${movieId}/review`;
+  assert.equal((await api('PUT', url, { token: userToken, body: { rating: 8 } })).status, 403);
+  assert.equal((await api('PUT', url, { token: adminToken, body: { rating: 11 } })).status, 400);
+  assert.equal((await api('PUT', url, { token: adminToken, body: { rating: 8, watched_on: '2026-02-31' } })).status, 400);
+  const saved = await api('PUT', url, { token: adminToken, body: { rating: 8, body: 'Great.', watched_on: '2026-10-01' } });
+  assert.equal(saved.status, 200);
+  assert.equal((await api('PUT', url, { token: adminToken, body: { rating: 9 } })).body.rating, 9);
+  const detail = (await api('GET', `/api/movies/${movieId}`)).body;
+  assert.equal(detail.review.rating, 9);
+  assert.equal(detail.my_rating, 9);
+  assert.equal((await api('GET', '/api/movies/reviews')).body.length, 1);
+  assert.equal((await api('DELETE', url, { token: adminToken })).status, 204);
+  assert.equal((await api('GET', `/api/movies/${movieId}`)).body.review, null);
+  assert.equal((await api('DELETE', url, { token: adminToken })).status, 404);
+});
+
 test('genres: a movie keeps at least one', async () => {
   const genres = (await api('GET', '/api/genres')).body;
   const thriller = genres.find((g) => g.name === 'Thriller');

@@ -24,7 +24,8 @@ users ─< reservations >─ showtimes >─ movies ─< movie_genres >─ genres
               └─< reservation_seats >─ seats >─ halls
 ```
 
-- **genres** are shared tags; a movie has 1 to 5 of them. A genre can't be deleted if it's the only genre of some movie.
+- **reviews** are the owner's personal film reviews, one per film (rating out of 10, optional write-up and watch date). Movie responses include `my_rating`, and the detail includes `review`.
+- **genres** are shared tags; a movie has at least one. A genre can't be deleted if it's the only genre of some movie.
 - **experiences** are presentation formats with a per-ticket surcharge. Every showtime has one (Standard by default). The showtime's `price_cents` is the full ticket price, so changing a surcharge never reprices tickets already on sale.
 - Schema changes are numbered migrations in `src/db.js`, tracked with `PRAGMA user_version`, so existing databases upgrade automatically on startup.
 
@@ -67,6 +68,9 @@ All bodies are JSON. Authenticated routes need `Authorization: Bearer <token>`. 
 | DELETE | `/api/movies/:id` | admin | blocked if showtimes exist |
 | PUT | `/api/movies/:id/poster` | admin | raw image bytes as the body (JPEG/PNG/WebP/GIF, ≤ 5 MB), saved under `uploads/posters/` |
 | DELETE | `/api/movies/:id/poster` | admin | removes the poster |
+| GET | `/api/movies/reviews` | – | all reviews with film titles, most recently watched first |
+| PUT | `/api/movies/:id/review` | admin | `{ rating: 1-10, body?, watched_on?: "YYYY-MM-DD" }`; creates or replaces the one review for that film |
+| DELETE | `/api/movies/:id/review` | admin | removes the review |
 
 ### Genres & experiences
 | Method | Path | Auth | Notes |
