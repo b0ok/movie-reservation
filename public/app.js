@@ -10,6 +10,8 @@ const state = {
   token: readToken(),
   ticketScope: 'upcoming',
   adminTab: 'overview',
+  showSort: { key: 'when', dir: 1 }, // admin showtimes table; dir 1 = ascending
+  browseGenre: 'All', // home page genre filter
 };
 
 // ---------- helpers ----------
@@ -258,13 +260,18 @@ async function renderHome() {
       ${poster(m)}
       <div class="card-info">
         <div class="card-title">${esc(m.title)}</div>
+        ${m.my_rating ? `<div class="card-rating" aria-label="My rating ${m.my_rating} out of 10">★ ${m.my_rating}<span>/10</span></div>` : ''}
         <div class="card-sub">${esc(m.genres.join(', '))} · ${runtime(m.duration_min)}</div>
         ${next ? `<div class="card-next">${isToday(next.starts_at) ? 'Today' : dayLabel(next.starts_at)} ${fmtTime(next.starts_at)}</div>` : '<div class="card-sub">No upcoming shows</div>'}
         ${formats(m.id) ? `<div class="card-xps">${formats(m.id)}</div>` : ''}
       </div></button>`;
   };
   const row = (title, list, note = '') => list.length ? `<section class="row"><h2>${title}${note ? ` <small>${note}</small>` : ''}</h2>
-    <div class="row-scroller">${list.map(card).join('')}</div></section>` : '';
+    <div class="row-track">
+      <button class="row-arrow prev" data-dir="-1" aria-label="Previous films">‹</button>
+      <div class="row-scroller">${list.map(card).join('')}</div>
+      <button class="row-arrow next" data-dir="1" aria-label="More films">›</button>
+    </div></section>` : '';
 
   const tonight = showing.filter((m) => byMovie.get(m.id).some((s) => isToday(s.starts_at)));
   const genres = [...new Set(movies.data.flatMap((m) => m.genres))].sort();
@@ -273,6 +280,9 @@ async function renderHome() {
   const inExperience = (x) => showing.filter((m) => byMovie.get(m.id).some((s) => s.experience === x));
   const popular = [...showing].sort((a, b) =>
     byMovie.get(b.id).reduce((n, s) => n + s.reserved, 0) - byMovie.get(a.id).reduce((n, s) => n + s.reserved, 0));
+
+  // Films the admin marked Now Playing lead the top row; with none marked, today's most-booked films fill it.
+  const picked = movies.data.filter((m) => m.now_playing).slice(0, 10);
 
   view.innerHTML = `
     <section class="hero">
@@ -290,14 +300,67 @@ async function renderHome() {
       </div>
     </section>
     <div class="rows">
-      ${row('Playing today', tonight, tonight.length ? `${tonight.length} films · <a class="see-all" href="#/schedule">See all showtimes →</a>` : '')}
+      ${row('Now Playing', picked.length ? picked : popular.filter((m) => tonight.includes(m)).slice(0, 10), `My top 10 films <a class="btn btn-line btn-sm" href="#/schedule">See all showtimes →</a>`)}
       ${experiences.map((x) => row(`${xpBadge(x, true)} Experience`, inExperience(x), esc(EXPERIENCE_INFO[x]?.tagline || ''))).join('')}
       ${row('Most booked this week', popular)}
-      ${genres.map((g) => row(esc(g), movies.data.filter((m) => m.genres.includes(g)))).join('')}
+      <section class="row browse" aria-labelledby="browse-title">
+        <h2 id="browse-title">Browse by genre</h2>
+        <div class="browse-controls">
+          <input type="search" id="browse-q" placeholder="Search titles" aria-label="Search titles">
+          <div class="xp-filter" role="tablist" aria-label="Genre" id="genre-pills"></div>
+        </div>
+        <div class="browse-grid" id="browse-grid" aria-live="polite"></div>
+      </section>
     </div>`;
+
+  // One genre at a time (plus an optional title search) instead of a row per genre.
+  if (!['All', ...genres].includes(state.browseGenre)) state.browseGenre = 'All';
+  const grid = view.querySelector('#browse-grid');
+  const drawBrowse = () => {
+    const q = view.querySelector('#browse-q').value.trim().toLowerCase();
+    const list = movies.data.filter((m) => (state.browseGenre === 'All' || m.genres.includes(state.browseGenre))
+      && (!q || m.title.toLowerCase().includes(q)));
+    grid.innerHTML = list.map(card).join('') || '<div class="empty"><strong>No films match</strong>Try another genre or search.</div>';
+  };
+  // The 10 most common genres are buttons; the rest sit behind "+N more" so the list stays short as films are added.
+  const count = (g) => movies.data.filter((m) => m.genres.includes(g)).length;
+  const byCount = [...genres].sort((a, b) => count(b) - count(a) || a.localeCompare(b));
+  const TOP = 10;
+  const drawPills = () => {
+    const shown = state.browseMore ? byCount : byCount.slice(0, TOP);
+    // A picked genre stays visible even when it's one of the hidden ones.
+    if (!shown.includes(state.browseGenre) && state.browseGenre !== 'All') shown.push(state.browseGenre);
+    const extra = byCount.length - TOP;
+    view.querySelector('#genre-pills').innerHTML = ['All', ...shown].map((g) =>
+      `<button class="xp-pill" role="tab" data-genre="${esc(g)}" aria-selected="${g === state.browseGenre}">${esc(g)}</button>`).join('')
+      + (extra > 0 ? `<button class="xp-pill more-pill" id="genre-more" aria-expanded="${!!state.browseMore}">${state.browseMore ? 'Show less' : `+${extra} more`}</button>` : '');
+    view.querySelectorAll('[data-genre]').forEach((b) => {
+      b.onclick = () => { state.browseGenre = b.dataset.genre; drawPills(); drawBrowse(); };
+    });
+    view.querySelector('#genre-more')?.addEventListener('click', () => { state.browseMore = !state.browseMore; drawPills(); });
+  };
+  drawPills();
+  view.querySelector('#browse-q').oninput = drawBrowse;
+  grid.onclick = (e) => { const c = e.target.closest('[data-movie]'); if (c) location.hash = `#/movie/${c.dataset.movie}`; };
+  drawBrowse();
 
   view.querySelectorAll('[data-movie]').forEach((el) => {
     el.onclick = () => { location.hash = `#/movie/${el.dataset.movie}`; };
+  });
+
+  // Arrows page each row by its visible width and hide at the ends.
+  view.querySelectorAll('.row-track').forEach((track) => {
+    const scroller = track.querySelector('.row-scroller');
+    const [prev, next] = track.querySelectorAll('.row-arrow');
+    const sync = () => {
+      prev.hidden = scroller.scrollLeft <= 4;
+      next.hidden = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 4;
+    };
+    for (const btn of [prev, next]) {
+      btn.onclick = () => scroller.scrollBy({ left: btn.dataset.dir * scroller.clientWidth * 0.85, behavior: 'smooth' });
+    }
+    scroller.addEventListener('scroll', sync, { passive: true });
+    new ResizeObserver(sync).observe(scroller);
   });
 }
 
@@ -314,7 +377,62 @@ async function theatreInfo() {
 
 // ---------- movie page (Cineplex-style: details, then Get Tickets by date and experience) ----------
 
-async function renderMovie(id, openTickets) {
+// The owner's review of a film: read-only for visitors, editable for the admin.
+function drawReview(section, movie) {
+  const r = movie.review;
+  const isAdmin = state.user?.role === 'admin';
+  section.hidden = !r && !isAdmin;
+  if (section.hidden) return;
+  const showForm = isAdmin && (!r || section.dataset.editing === '1');
+  if (!showForm) {
+    section.innerHTML = `
+      <div class="review-head"><h2>My Review</h2>${isAdmin ? '<button class="btn btn-line btn-sm" id="rv-edit">Edit review</button>' : ''}</div>
+      <div class="review-card">
+        <div class="review-score"><b>${r.rating}</b><span>/10</span></div>
+        <div class="review-text">
+          ${r.watched_on ? `<div class="review-when">Watched ${new Date(`${r.watched_on}T12:00:00`).toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' })}</div>` : ''}
+          ${r.body ? `<p>${esc(r.body)}</p>` : '<p class="hint">No write-up yet.</p>'}
+        </div>
+      </div>`;
+    section.querySelector('#rv-edit')?.addEventListener('click', () => { section.dataset.editing = '1'; drawReview(section, movie); });
+    return;
+  }
+  const today = localDay(new Date().toISOString());
+  section.innerHTML = `
+    <div class="review-head"><h2>${r ? 'Edit my review' : 'Write a review'}</h2></div>
+    <form class="panel form-grid review-form" novalidate>
+      <fieldset class="field rating-field"><legend>Rating</legend>
+        <div class="rating-pick">${Array.from({ length: 10 }, (_, i) => i + 1).map((n) => `
+          <label><input type="radio" name="rating" value="${n}" ${r?.rating === n ? 'checked' : ''}><span>${n}</span></label>`).join('')}</div>
+      </fieldset>
+      <div class="field"><label for="rv-date">Watched on</label><input id="rv-date" name="watched_on" type="date" max="${today}" value="${esc(r?.watched_on ?? today)}"></div>
+      <div class="field"><label for="rv-body">Review</label><textarea id="rv-body" name="body" maxlength="10000" rows="6" placeholder="What did you think?">${esc(r?.body)}</textarea></div>
+      <div class="form-error" id="rv-error"></div>
+      <div class="review-actions">
+        <button class="btn btn-gold" type="submit">Save review</button>
+        ${r ? '<button class="btn btn-line" type="button" id="rv-cancel">Cancel</button><button class="btn btn-danger" type="button" id="rv-delete">Delete</button>' : ''}
+      </div>
+    </form>`;
+  const form = section.querySelector('form');
+  const done = (review) => { movie.review = review; section.dataset.editing = ''; drawReview(section, movie); };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(form));
+    if (!f.rating) { form.querySelector('#rv-error').textContent = 'Pick a rating from 1 to 10.'; return; }
+    try {
+      done(await api('PUT', `/api/movies/${movie.id}/review`, { rating: Number(f.rating), body: f.body, watched_on: f.watched_on }));
+      toast('Review saved', 'ok');
+    } catch (err) { form.querySelector('#rv-error').textContent = errorText(err); }
+  };
+  section.querySelector('#rv-cancel')?.addEventListener('click', () => done(r));
+  section.querySelector('#rv-delete')?.addEventListener('click', async () => {
+    if (!confirm('Delete your review of this film?')) return;
+    try { await api('DELETE', `/api/movies/${movie.id}/review`); done(null); toast('Review deleted', 'ok'); }
+    catch (err) { toast(errorText(err), 'error'); }
+  });
+}
+
+async function renderMovie(id, sub) {
   const [movie, shows, theatre] = await Promise.all([
     api('GET', `/api/movies/${id}`),
     api('GET', `/api/showtimes?movieId=${id}&limit=100`),
@@ -341,7 +459,7 @@ async function renderMovie(id, openTickets) {
         <div class="movie-info">
           <a class="link-btn" href="#/">← All films</a>
           <h1>${esc(movie.title)}</h1>
-          <div class="meta">${genreTags(movie.genres)}<span>${runtime(movie.duration_min)}</span></div>
+          <div class="meta">${movie.genres.map((g) => `<a class="tag tag-link" href="#/genre/${encodeURIComponent(g)}" title="Browse ${esc(g)} films">${esc(g)}</a>`).join('')}<span>${runtime(movie.duration_min)}</span></div>
           ${formats.length ? `<div class="meta">${formats.sort(xpOrder).map((x) => xpBadge(x, true)).join('')}</div>` : ''}
           <p>${esc(movie.description)}</p>
           <div class="hero-actions">
@@ -350,6 +468,7 @@ async function renderMovie(id, openTickets) {
         </div>
       </div>
     </section>
+    <section class="page review-panel" id="review"></section>
     <section class="page tickets-panel" id="tickets">
       <div class="tp-head">
         <h2>Get Tickets</h2>
@@ -397,7 +516,8 @@ async function renderMovie(id, openTickets) {
     };
   });
   drawGroups();
-  if (openTickets) view.querySelector('#tickets').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  drawReview(view.querySelector('#review'), movie);
+  if (sub === 'tickets' || sub === 'review') view.querySelector(`#${sub}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
   view.querySelector('.date-strip [aria-selected="true"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
 }
 
@@ -847,7 +967,7 @@ async function renderAdmin() {
     view.innerHTML = `<div class="page"><div class="empty"><strong>Admins only</strong>This area is for theatre staff.<a class="btn btn-gold" href="#/">Back to films</a></div></div>`;
     return;
   }
-  const tabs = [['overview', 'Overview'], ['reservations', 'Reservations'], ['movies', 'Films'], ['showtimes', 'Showtimes'], ['experiences', 'Experiences'], ['users', 'Members']];
+  const tabs = [['overview', 'Overview'], ['reservations', 'Reservations'], ['movies', 'Films'], ['showtimes', 'Showtimes'], ['experiences', 'Experiences'], ['reviews', 'Reviews'], ['users', 'Members']];
   view.innerHTML = `
     <div class="page">
       <div class="page-head">
@@ -861,7 +981,7 @@ async function renderAdmin() {
   });
   const body = view.querySelector('#admin-body');
   try {
-    await ({ overview: adminOverview, reservations: adminReservations, movies: adminMovies, showtimes: adminShowtimes, experiences: adminExperiences, users: adminUsers })[state.adminTab](body);
+    await ({ overview: adminOverview, reservations: adminReservations, movies: adminMovies, showtimes: adminShowtimes, experiences: adminExperiences, reviews: adminReviews, users: adminUsers })[state.adminTab](body);
   } catch (err) {
     body.innerHTML = `<div class="empty"><strong>Couldn't load this tab</strong>${esc(errorText(err))}</div>`;
   }
@@ -934,8 +1054,12 @@ async function adminMovies(body) {
           <div class="panel-head"><h2>${editing ? 'Edit film' : 'Add a film'}</h2>
             ${editing ? '<button type="button" class="link-btn" id="cancel-edit">Cancel</button>' : ''}</div>
           <div class="field"><label for="m-title">Title</label><input id="m-title" name="title" required maxlength="200" value="${esc(editing?.title)}"></div>
-          <div class="field"><label for="m-duration">Runtime (minutes)</label><input id="m-duration" name="duration_min" type="number" min="1" max="600" required value="${editing?.duration_min ?? ''}"></div>
-          <div class="field"><label for="m-new-genre">Genres <span class="hint">pick 1 to 5</span></label>
+          <fieldset class="field runtime-field"><legend>Runtime</legend>
+            <div class="runtime-inputs">
+              <label><input id="m-hours" name="hours" type="number" min="0" max="10" inputmode="numeric" placeholder="0" value="${editing ? Math.floor(editing.duration_min / 60) : ''}"> hr</label>
+              <label><input id="m-mins" name="mins" type="number" min="0" max="59" inputmode="numeric" placeholder="0" value="${editing ? editing.duration_min % 60 : ''}"> min</label>
+            </div></fieldset>
+          <div class="field"><label for="m-new-genre">Genres <span class="hint">pick at least 1</span></label>
             <div class="genre-picker" id="genre-picker"></div>
             <input id="m-new-genre" placeholder="New genre, then press Enter" maxlength="50">
           </div>
@@ -960,14 +1084,15 @@ async function adminMovies(body) {
         </div>
       </div>
       <div class="panel"><h2>Films (${movies.total})</h2><div class="table-wrap"><table>
-        <thead><tr><th></th><th>Title</th><th>Genres</th><th>Runtime</th><th>Shows</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Title</th><th>Genres</th><th>Runtime</th><th>Shows</th><th>Now Playing</th><th></th></tr></thead>
         <tbody>${movies.data.map((m) => `<tr class="${m.id === state.editMovieId ? 'editing' : ''}">
           <td class="thumb">${poster(m)}</td>
           <td><b>${esc(m.title)}</b></td><td>${esc(m.genres.join(', '))}</td><td class="num">${runtime(m.duration_min)}</td>
           <td class="num">${upcomingCount(m.id)}</td>
+          <td><button class="btn btn-sm ${m.now_playing ? 'btn-gold' : 'btn-line'}" data-now="${m.id}" aria-pressed="${!!m.now_playing}">${m.now_playing ? '★ Now Playing' : '+ Now Playing'}</button></td>
           <td class="actions" data-row="${m.id}"><button class="btn btn-line btn-sm" data-edit="${m.id}">Edit</button>
             <button class="btn btn-danger btn-sm" data-del-movie="${m.id}">Delete</button></td></tr>`).join('')
-          || '<tr><td colspan="6">No films yet. Add one with the form.</td></tr>'}</tbody></table></div></div>
+          || '<tr><td colspan="7">No films yet. Add one with the form.</td></tr>'}</tbody></table></div></div>
     </div>`;
 
   const form = body.querySelector('#movie-form');
@@ -1027,7 +1152,11 @@ async function adminMovies(body) {
     const f = Object.fromEntries(new FormData(form));
     if (!selected.size) { errorBox.textContent = 'Pick at least one genre.'; return; }
     if (!editing && !file && !f.poster_url) { errorBox.textContent = 'Add a poster: upload an image or paste a link.'; return; }
-    const payload = { title: f.title, description: f.description, duration_min: Number(f.duration_min), genres: [...selected] };
+    const hours = Number(f.hours || 0), mins = Number(f.mins || 0);
+    if (!Number.isInteger(hours) || !Number.isInteger(mins) || hours < 0 || mins < 0 || mins > 59) { errorBox.textContent = 'Runtime: whole hours, and minutes from 0 to 59.'; return; }
+    const duration_min = hours * 60 + mins;
+    if (duration_min < 1 || duration_min > 600) { errorBox.textContent = 'Runtime must be between 1 minute and 10 hours.'; return; }
+    const payload = { title: f.title, description: f.description, duration_min, genres: [...selected] };
     if (f.poster_url && f.poster_url !== linkedPoster) payload.poster_url = f.poster_url;
     const btn = form.querySelector('button[type=submit]');
     btn.disabled = true;
@@ -1049,6 +1178,15 @@ async function adminMovies(body) {
   body.querySelectorAll('[data-edit]').forEach((b) => {
     b.onclick = () => { state.editMovieId = Number(b.dataset.edit); renderAdmin(); scrollTo({ top: 0, behavior: 'smooth' }); };
   });
+  body.querySelectorAll('[data-now]').forEach((b) => {
+    b.onclick = async () => {
+      const on = b.getAttribute('aria-pressed') !== 'true';
+      b.disabled = true;
+      try { await api('PATCH', `/api/movies/${b.dataset.now}`, { now_playing: on ? 1 : 0 }); toast(on ? 'Added to Now Playing' : 'Removed from Now Playing', 'ok'); }
+      catch (err) { toast(errorText(err), 'error'); }
+      renderAdmin();
+    };
+  });
   body.querySelectorAll('[data-del-movie]').forEach((b) => {
     b.onclick = () => {
       const cell = body.querySelector(`[data-row="${b.dataset.delMovie}"]`);
@@ -1069,11 +1207,38 @@ async function adminMovies(body) {
   });
 }
 
+async function adminReviews(body) {
+  const [reviews, movies] = await Promise.all([api('GET', '/api/movies/reviews'), api('GET', '/api/movies?limit=100')]);
+  const unreviewed = movies.data.filter((m) => !m.my_rating);
+  body.innerHTML = `<div class="stack">
+    <div class="panel"><h2>My reviews (${reviews.length})</h2><div class="table-wrap"><table>
+      <thead><tr><th>Film</th><th>Rating</th><th>Watched</th><th>Review</th><th></th></tr></thead>
+      <tbody>${reviews.map((r) => `<tr>
+        <td><b>${esc(r.title)}</b></td><td class="num"><b class="gold">★ ${r.rating}</b>/10</td>
+        <td class="num">${r.watched_on ? fmtDay(`${r.watched_on}T12:00:00`) : '—'}</td>
+        <td><div class="review-excerpt">${esc(r.body) || '<span class="hint">No write-up</span>'}</div></td>
+        <td class="actions"><a class="btn btn-line btn-sm" href="#/movie/${r.movie_id}/review">Edit</a></td></tr>`).join('')
+        || '<tr><td colspan="5">No reviews yet. Open a film below to write one.</td></tr>'}</tbody></table></div></div>
+    ${unreviewed.length ? `<div class="panel"><h2>Not reviewed yet (${unreviewed.length})</h2>
+      <div class="chips">${unreviewed.map((m) => `<a class="genre-chip" href="#/movie/${m.id}/review">${esc(m.title)} <small>+ Review</small></a>`).join('')}</div></div>` : ''}</div>`;
+}
+
+const SHOW_COLS = [['when', 'When'], ['film', 'Film'], ['experience', 'Experience'], ['hall', 'Hall'], ['price', 'Price'], ['sold', 'Sold']];
+
 async function adminShowtimes(body) {
+  // The API pages at 100; fetch every upcoming show so sorting covers the whole schedule.
+  const allShows = async () => {
+    const out = [];
+    for (let offset = 0; ; offset += 100) {
+      const page = await api('GET', `/api/showtimes?limit=100&offset=${offset}`);
+      out.push(...page.data);
+      if (page.data.length < 100) return { data: out };
+    }
+  };
   const [movies, halls, shows, experiences] = await Promise.all([
     api('GET', '/api/movies?limit=100'),
     api('GET', '/api/halls'),
-    api('GET', '/api/showtimes?limit=100'),
+    allShows(),
     api('GET', '/api/experiences'),
   ]);
   // Default the picker to tomorrow 7:00 PM local time.
@@ -1103,14 +1268,43 @@ async function adminShowtimes(body) {
         <button class="btn btn-gold" type="submit" ${movies.data.length && halls.length ? '' : 'disabled'}>Schedule</button>
       </form>
       <div class="panel"><h2>Upcoming showtimes (${shows.data.length})</h2><div class="table-wrap"><table>
-        <thead><tr><th>When</th><th>Film</th><th>Experience</th><th>Hall</th><th>Price</th><th>Sold</th><th></th></tr></thead>
-        <tbody>${shows.data.map((s) => {
-          const pct = Math.round((s.reserved / s.capacity) * 1000) / 10;
-          return `<tr><td class="num">${fmtDay(s.starts_at)}<br>${fmtTime(s.starts_at)}</td><td>${esc(s.movie_title)}</td><td>${xpBadge(s.experience, true)}</td><td>${esc(s.hall_name)}</td>
-            <td class="num">${money(s.price_cents)}</td><td>${occupancy(s.reserved, s.capacity, pct)}</td>
-            <td class="actions"><button class="btn btn-danger btn-sm" data-del-show="${s.id}" ${s.reserved ? 'disabled title="Has bookings"' : ''}>Delete</button></td></tr>`;
-        }).join('') || '<tr><td colspan="7">Nothing scheduled.</td></tr>'}</tbody></table></div></div>
+        <thead><tr>${SHOW_COLS.map(([k, label]) => `<th data-col="${k}"><button class="th-sort" data-sort="${k}">${label}<i aria-hidden="true"></i></button></th>`).join('')}<th></th></tr></thead>
+        <tbody id="show-rows"></tbody></table></div></div>
     </div>`;
+
+  // Click a column header to sort by it; click again to flip ascending/descending. Ties fall back to start time.
+  const sorters = {
+    when: (s) => s.starts_at, film: (s) => s.movie_title.toLowerCase(), experience: (s) => s.experience.toLowerCase(),
+    hall: (s) => s.hall_name.toLowerCase(), price: (s) => s.price_cents, sold: (s) => s.reserved / s.capacity,
+  };
+  const drawShows = () => {
+    const { key, dir } = state.showSort;
+    const by = sorters[key];
+    const rows = [...shows.data].sort((a, b) => (by(a) < by(b) ? -dir : by(a) > by(b) ? dir : 0) || a.starts_at.localeCompare(b.starts_at));
+    body.querySelector('#show-rows').innerHTML = rows.map((s) => {
+      const pct = Math.round((s.reserved / s.capacity) * 1000) / 10;
+      return `<tr><td class="num">${fmtDay(s.starts_at)}<br>${fmtTime(s.starts_at)}</td><td>${esc(s.movie_title)}</td><td>${xpBadge(s.experience, true)}</td><td>${esc(s.hall_name)}</td>
+        <td class="num">${money(s.price_cents)}</td><td>${occupancy(s.reserved, s.capacity, pct)}</td>
+        <td class="actions"><button class="btn btn-danger btn-sm" data-del-show="${s.id}" ${s.reserved ? 'disabled title="Has bookings"' : ''}>Delete</button></td></tr>`;
+    }).join('') || '<tr><td colspan="7">Nothing scheduled.</td></tr>';
+    body.querySelectorAll('th[data-col]').forEach((th) => {
+      th.setAttribute('aria-sort', th.dataset.col === key ? (dir > 0 ? 'ascending' : 'descending') : 'none');
+    });
+    body.querySelectorAll('[data-del-show]').forEach((b) => {
+      b.onclick = async () => {
+        try { await api('DELETE', `/api/showtimes/${b.dataset.delShow}`); toast('Showtime removed', 'ok'); renderAdmin(); }
+        catch (err) { toast(errorText(err), 'error'); }
+      };
+    });
+  };
+  body.querySelectorAll('[data-sort]').forEach((b) => {
+    b.onclick = () => {
+      const k = b.dataset.sort;
+      state.showSort = { key: k, dir: state.showSort.key === k ? -state.showSort.dir : 1 };
+      drawShows();
+    };
+  });
+  drawShows();
 
   const form = body.querySelector('#show-form');
   const ticketCents = () => Math.round(Number(form.querySelector('#s-price').value) * 100)
@@ -1139,12 +1333,6 @@ async function adminShowtimes(body) {
       form.querySelector('#s-error').textContent = (Array.isArray(err.details) ? errorText(err) : err.message) + clash;
     }
   };
-  body.querySelectorAll('[data-del-show]').forEach((b) => {
-    b.onclick = async () => {
-      try { await api('DELETE', `/api/showtimes/${b.dataset.delShow}`); toast('Showtime removed', 'ok'); renderAdmin(); }
-      catch (err) { toast(errorText(err), 'error'); }
-    };
-  });
 }
 
 async function adminExperiences(body) {
@@ -1323,12 +1511,18 @@ async function render() {
   scrollTo(0, 0);
   state.moviePage = null;
   try {
-    if (route === 'movie' && id) { await renderMovie(id, sub === 'tickets'); state.moviePage = id; }
+    if (route === 'movie' && id) { await renderMovie(id, sub); state.moviePage = id; }
     else if (route === 'book' && id) await renderBooking(id);
     else if (route === 'schedule') await renderSchedule(id);
     else if (route === 'tickets') await renderTickets();
+    else if (route === 'genre' && id) {
+      // Genre tags on movie pages land on the home page's browse section with that genre picked.
+      try { state.browseGenre = decodeURIComponent(id); } catch { state.browseGenre = 'All'; }
+      await renderHome();
+      view.querySelector('.browse')?.scrollIntoView({ block: 'start' });
+    }
     else if (route === 'admin') {
-      if (['overview', 'reservations', 'movies', 'showtimes', 'experiences', 'users'].includes(id)) state.adminTab = id;
+      if (['overview', 'reservations', 'movies', 'showtimes', 'experiences', 'reviews', 'users'].includes(id)) state.adminTab = id;
       await renderAdmin();
     }
     else await renderHome();

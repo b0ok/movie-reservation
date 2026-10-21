@@ -123,6 +123,21 @@ export const MIGRATIONS = [
   ALTER TABLE reservation_seats ADD COLUMN price_cents INTEGER NOT NULL DEFAULT 0;
   UPDATE reservation_seats SET price_cents = (SELECT price_cents FROM showtimes WHERE id = reservation_seats.showtime_id);
   `,
+  // 4: admins hand-pick the films shown in the homepage's Now Playing row.
+  `
+  ALTER TABLE movies ADD COLUMN now_playing INTEGER NOT NULL DEFAULT 0 CHECK (now_playing IN (0, 1));
+  `,
+  // 5: the owner's personal film reviews, one per film.
+  `
+  CREATE TABLE reviews (
+    movie_id   INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE,
+    rating     INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 10),
+    body       TEXT NOT NULL DEFAULT '',
+    watched_on TEXT,                 -- YYYY-MM-DD
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  `,
 ];
 
 function migrate(db) {

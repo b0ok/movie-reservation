@@ -10,12 +10,19 @@ const MOVIE_RULES = {
   title: { type: 'string', required: true, min: 1, max: 200 },
   description: { type: 'string', required: true, min: 1, max: 2000 },
   poster_url: { type: 'string', max: 500, pattern: /^https?:\/\// },
-  genres: { type: 'stringArray', required: true, min: 1, max: 5 },
+  genres: { type: 'stringArray', required: true, min: 1 },
   duration_min: { type: 'int', required: true, min: 1, max: 600 },
+  now_playing: { type: 'int', min: 0, max: 1 },
+};
+
+const REVIEW_RULES = {
+  rating: { type: 'int', required: true, min: 1, max: 10 },
+  body: { type: 'string', max: 10000 },
+  watched_on: { type: 'string', pattern: /^\d{4}-\d{2}-\d{2}$/ },
 };
 
 const MOVIE_SELECT = `
-  SELECT m.*,
+  SELECT m.*, (SELECT rating FROM reviews WHERE movie_id = m.id) AS my_rating,
          (SELECT json_group_array(name) FROM (
             SELECT g.name FROM movie_genres mg JOIN genres g ON g.id = mg.genre_id
             WHERE mg.movie_id = m.id ORDER BY g.name)) AS genres_json
@@ -86,10 +93,42 @@ export default function movieRoutes(db, { auth, uploadDir }) {
     res.json({ data: movies.map(formatMovie), total, limit, offset });
   });
 
-  // Movie detail with its upcoming showtimes.
+  // All reviews, newest watch first (public: they're shown on the site).
+  router.get('/reviews', (_req, res) => {
+    res.json(db.prepare(`
+      SELECT r.*, m.title FROM reviews r JOIN movies m ON m.id = r.movie_id
+      ORDER BY COALESCE(r.watched_on, substr(r.created_at, 1, 10)) DESC, r.updated_at DESC`).all());
+  });
+
+  const getReview = (id) => db.prepare('SELECT * FROM reviews WHERE movie_id = ?').get(id) ?? null;
+
+  // Create or replace the review for a film.
+  router.put('/:id/review', auth, requireAdmin, (req, res) => {
+    const id = parseId(req.params.id);
+    if (!getMovie(id)) throw notFound('Movie');
+    const r = validate(req.body, REVIEW_RULES);
+    // Round-trip check rejects impossible dates like 2026-02-31.
+    const watched = r.watched_on && new Date(`${r.watched_on}T00:00:00Z`);
+    if (watched && (Number.isNaN(watched.getTime()) || watched.toISOString().slice(0, 10) !== r.watched_on)) {
+      throw badRequest('watched_on is not a real date');
+    }
+    db.prepare(`INSERT INTO reviews (movie_id, rating, body, watched_on) VALUES (?, ?, ?, ?)
+      ON CONFLICT (movie_id) DO UPDATE SET rating = excluded.rating, body = excluded.body, watched_on = excluded.watched_on,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`).run(id, r.rating, r.body ?? '', r.watched_on ?? null);
+    res.json(getReview(id));
+  });
+
+  router.delete('/:id/review', auth, requireAdmin, (req, res) => {
+    const id = parseId(req.params.id);
+    if (!db.prepare('DELETE FROM reviews WHERE movie_id = ?').run(id).changes) throw notFound('Review');
+    res.status(204).end();
+  });
+
+  // Movie detail with its upcoming showtimes and review.
   router.get('/:id', (req, res) => {
     const movie = getMovie(parseId(req.params.id));
     if (!movie) throw notFound('Movie');
+    movie.review = getReview(movie.id);
     const showtimes = db.prepare(`
       SELECT s.id, s.starts_at, s.ends_at, s.price_cents, h.id AS hall_id, h.name AS hall_name,
              e.id AS experience_id, e.name AS experience
@@ -103,8 +142,8 @@ export default function movieRoutes(db, { auth, uploadDir }) {
     const m = validate(req.body, MOVIE_RULES);
     const id = transaction(db, () => {
       const { lastInsertRowid } = db.prepare(
-        'INSERT INTO movies (title, description, poster_url, duration_min) VALUES (?, ?, ?, ?)',
-      ).run(m.title, m.description, m.poster_url ?? null, m.duration_min);
+        'INSERT INTO movies (title, description, poster_url, duration_min, now_playing) VALUES (?, ?, ?, ?, ?)',
+      ).run(m.title, m.description, m.poster_url ?? null, m.duration_min, m.now_playing ?? 0);
       setGenres(lastInsertRowid, m.genres);
       return lastInsertRowid;
     });
