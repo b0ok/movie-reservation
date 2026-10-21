@@ -14,7 +14,7 @@ npm start                 # http://localhost:3000
 npm test
 ```
 
-On startup, if no admin exists, one is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD`. If `DEMO_EMAIL` / `DEMO_PASSWORD` are set, a regular (non-admin) demo customer account is kept in sync with them and its login is shown on the sign-in screen; the site's "Create an account" link is a placeholder for the portfolio demo. Because every visitor shares that account, its bookings are deleted once a day at `DEMO_RESET_HOUR` (default 4 AM, theatre time zone); the last reset date is stored in the database, so restarts never reset twice and a server that slept through the hour catches up when it wakes. Public signup always creates a regular `user`. Admins can promote other users.
+On startup, if no admin exists, one is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD`. If `DEMO_EMAIL` / `DEMO_PASSWORD` are set, a regular (non-admin) demo customer account is kept in sync with them and its login is shown on the sign-in screen; the site's "Create an account" link is a placeholder for the portfolio demo. Because every visitor shares that account, its bookings are deleted once a day at `DEMO_RESET_HOUR` (default 4 AM, theatre time zone); the last reset date is stored in the database, so restarts never reset twice and a server that slept through the hour catches up when it wakes. Public signup is closed unless `ALLOW_SIGNUP=true`, and always creates a regular `user`. The server refuses to start with the example `JWT_SECRET`. Admins can promote other users.
 
 ## Data model
 

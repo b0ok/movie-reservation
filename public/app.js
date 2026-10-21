@@ -25,6 +25,9 @@ function writeToken(token) {
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Broken poster images drop out so the generated poster art shows (inline onerror is blocked by the CSP).
+document.addEventListener('error', (e) => { if (e.target instanceof HTMLImageElement) e.target.remove(); }, true);
+
 const money = (cents) => (cents / 100).toLocaleString('en-CA', { style: 'currency', currency: 'CAD' });
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const fmtDay = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
@@ -89,7 +92,7 @@ function artBg(title) {
           linear-gradient(160deg, hsl(${a} 45% 16%), hsl(${b} 55% 7%))`;
 }
 function poster(movie) {
-  const img = movie.poster_url ? `<img src="${esc(movie.poster_url)}" alt="" loading="lazy" onerror="this.remove()">` : '';
+  const img = movie.poster_url ? `<img src="${esc(movie.poster_url)}" alt="" loading="lazy">` : '';
   return `<div class="poster ${img ? 'has-img' : ''}" style="--p-bg:${artBg(movie.title)}">${img}
     <div class="poster-genre">${esc((movie.genres || []).slice(0, 2).join(' · '))}</div>
     <div class="poster-title">${esc(movie.title)}</div>
@@ -296,7 +299,7 @@ async function renderHome() {
   view.innerHTML = `
     <section class="hero">
       <div class="hero-art" style="background:${artBg(featured.title)}">${featured.poster_url
-        ? `<img class="hero-bg-img" src="${esc(featured.poster_url)}" alt="" onerror="this.remove()">`
+        ? `<img class="hero-bg-img" src="${esc(featured.poster_url)}" alt="">`
         : `<div class="hero-title-art" aria-hidden="true">${esc(featured.title)}</div>`}</div>
       ${featured.poster_url ? `<button class="hero-poster" data-movie="${featured.id}" aria-label="${esc(featured.title)} details">${poster(featured)}</button>` : ''}
       <div class="hero-content">
@@ -476,7 +479,7 @@ async function renderMovie(id, sub) {
   if (!daysWithShows.has(state.movieDay)) state.movieDay = [...daysWithShows][0] || today;
   const formats = [...new Set(shows.data.map((s) => s.experience))];
   const art = movie.poster_url
-    ? `<img class="movie-hero-img" src="${esc(movie.poster_url)}" alt="" onerror="this.remove()">`
+    ? `<img class="movie-hero-img" src="${esc(movie.poster_url)}" alt="">`
     : `<div class="hero-title-art" aria-hidden="true">${esc(movie.title)}</div>`;
 
   view.innerHTML = `

@@ -56,7 +56,7 @@ export function formatReservation(row) {
 // snacks is { comboId: qty }; prices come from SNACK_COMBOS and are added to the total.
 export function createReservation(db, userId, showtimeId, labels, tickets = { adult: labels.length }, snacks = {}) {
   for (const [combo, qty] of Object.entries(snacks)) {
-    if (!SNACK_COMBOS[combo]) throw badRequest(`Unknown snack combo: ${combo}`);
+    if (!Object.hasOwn(SNACK_COMBOS, combo)) throw badRequest(`Unknown snack combo: ${combo}`);
     if (!Number.isInteger(qty) || qty < 1 || qty > MAX_COMBO_QTY) throw badRequest(`Snack quantity must be 1 to ${MAX_COMBO_QTY}`);
   }
   const snackCents = Object.entries(snacks).reduce((sum, [combo, qty]) => sum + SNACK_COMBOS[combo].price_cents * qty, 0);
@@ -84,7 +84,7 @@ export function createReservation(db, userId, showtimeId, labels, tickets = { ad
     const prices = Object.fromEntries(ticketPrices(st.price_cents, st.min_age).map((t) => [t.type, t.price_cents]));
     const perSeat = [];
     for (const [type, count] of Object.entries(tickets)) {
-      if (!(type in prices)) {
+      if (!Object.hasOwn(prices, type)) {
         throw badRequest(type === 'child' && st.min_age ? `Child tickets aren't sold for ${st.min_age}+ showings` : `Unknown ticket type: ${type}`);
       }
       for (let i = 0; i < count; i++) perSeat.push(type);

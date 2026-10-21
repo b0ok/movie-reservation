@@ -4,6 +4,7 @@ import { openDb } from '../src/db.js';
 import { createApp, ensureAdmin } from '../src/app.js';
 
 process.env.JWT_SECRET = 'test-secret';
+process.env.ALLOW_SIGNUP = 'true';
 process.env.THEATRE_HOURS = '0-48'; // effectively always open
 
 let server;
@@ -51,4 +52,34 @@ test('started showtimes cannot be rescheduled', async () => {
   await new Promise((r) => setTimeout(r, 2100));
   const res = await api('PATCH', `/api/showtimes/${show.id}`, { token: admin, body: { price_cents: 1 } });
   assert.equal(res.status, 409);
+});
+
+test('sign-up is closed unless ALLOW_SIGNUP=true', async () => {
+  process.env.ALLOW_SIGNUP = 'false';
+  try {
+    const res = await api('POST', '/api/auth/signup', { body: { name: 'Pirate', email: 'pirate@test.com', password: 'password123' } });
+    assert.equal(res.status, 403);
+  } finally {
+    process.env.ALLOW_SIGNUP = 'true';
+  }
+});
+
+test('prototype keys in tickets or snacks are rejected as 400, not 500', async () => {
+  const admin = (await api('POST', '/api/auth/login', { body: { email: 'admin@test.com', password: 'adminpass123' } })).body.token;
+  const movie = (await api('POST', '/api/movies', { token: admin, body: { title: 'P', description: 'd', genres: ['Drama'], duration_min: 60 } })).body;
+  const hall = (await api('POST', '/api/halls', { token: admin, body: { name: 'P', row_count: 1, seats_per_row: 2 } })).body;
+  const show = (await api('POST', '/api/showtimes', {
+    token: admin, body: { movie_id: movie.id, hall_id: hall.id, starts_at: new Date(Date.now() + 3_600_000).toISOString(), price_cents: 100 },
+  })).body;
+  for (const extra of [{ tickets: { constructor: 1 } }, { snacks: { constructor: 1 } }, { snacks: { toString: 1 } }]) {
+    const res = await api('POST', '/api/reservations', { token: admin, body: { showtime_id: show.id, seats: ['A1'], ...extra } });
+    assert.equal(res.status, 400, JSON.stringify(extra));
+  }
+});
+
+test('responses carry security headers and hide Express', async () => {
+  const res = await fetch(`${base}/`);
+  assert.match(res.headers.get('content-security-policy'), /script-src 'self'/);
+  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  assert.equal(res.headers.get('x-powered-by'), null);
 });

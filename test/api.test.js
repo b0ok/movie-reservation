@@ -8,6 +8,7 @@ import { openDb, MIGRATIONS } from '../src/db.js';
 import { createApp, ensureAdmin } from '../src/app.js';
 
 process.env.JWT_SECRET = 'test-secret';
+process.env.ALLOW_SIGNUP = 'true';
 process.env.THEATRE_HOURS = '0-48'; // effectively always open
 
 let server;

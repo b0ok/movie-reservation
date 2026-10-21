@@ -5,6 +5,7 @@ import { createApp, ensureAdmin } from '../src/app.js';
 import { ensureSimulatedUser, simulateTick, targetOccupancy, seatScore, SIMULATED_EMAIL } from '../src/simulator.js';
 
 process.env.JWT_SECRET = 'test-secret';
+process.env.ALLOW_SIGNUP = 'true';
 process.env.THEATRE_HOURS = '0-48'; // effectively always open
 
 let db;
