@@ -113,6 +113,16 @@ img { max-width: 100%; display: block; }
   color: rgba(255,255,255,.07); text-align: right; max-width: 70vw; letter-spacing: .01em;
   word-break: break-word;
 }
+/* Featured film with a poster: blurred poster backdrop, the poster itself on the right. */
+.hero-bg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(22px) saturate(1.15); transform: scale(1.12); opacity: .5; }
+.hero-poster {
+  position: absolute; z-index: 1; right: var(--edge); bottom: clamp(48px, 9vh, 110px); width: clamp(200px, 22vw, 340px);
+  padding: 0; border: 0; background: none; cursor: pointer; animation: rise .8s ease .1s both; transition: transform .25s ease;
+}
+.hero-poster .poster { box-shadow: 0 30px 70px rgba(0,0,0,.75), 0 0 0 1px rgba(255,255,255,.08); }
+.hero-poster:hover, .hero-poster:focus-visible { transform: translateY(-4px) scale(1.02); }
+.hero:has(.hero-poster) .hero-content { max-width: min(calc(720px + var(--edge)), calc(100% - clamp(200px, 22vw, 340px) - var(--edge) - 40px)); }
+@media (max-width: 900px) { .hero-poster { display: none; } .hero:has(.hero-poster) .hero-content { max-width: 100%; } }
 .hero-content { position: relative; z-index: 1; padding: 0 var(--gutter) clamp(48px, 9vh, 110px); max-width: 720px; display: grid; gap: 18px; animation: rise .8s ease both; }
 .hero-eyebrow { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 800; letter-spacing: .22em; text-transform: uppercase; color: var(--gold); }
 .hero-eyebrow::before { content: ""; width: 26px; height: 2px; background: var(--gold); }
@@ -154,6 +164,8 @@ img { max-width: 100%; display: block; }
 .card-sub { font-size: 12.5px; color: var(--muted); }
 .card-next { font-size: 12.5px; color: var(--gold); font-weight: 700; }
 .browse-controls { display: grid; gap: 12px; padding: 0 var(--edge) 12px; }
+.browse-search { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+.browse-search input[type="search"] { flex: 1 1 220px; }
 .browse-controls input[type="search"] { max-width: 360px; padding: 11px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
 .browse-controls input[type="search"]:focus { border-color: var(--gold); outline: none; }
 .browse-controls .xp-filter { margin: 0; }

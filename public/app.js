@@ -243,10 +243,8 @@ async function renderHome() {
     return;
   }
 
-  // Feature a different film each day.
-  const pool = showing.length ? showing : movies.data;
-  const dayIndex = Math.floor(Date.now() / 86_400_000);
-  const featured = pool[dayIndex % pool.length];
+  // Feature the most recently added film. ponytail: picks from the first 100 films only, add an API sort if the catalog outgrows that.
+  const featured = movies.data.reduce((a, b) => (b.created_at > a.created_at || (b.created_at === a.created_at && b.id > a.id) ? b : a));
   const nextShow = byMovie.get(featured.id)?.[0];
 
   // Cards show at most two premium formats to stay scannable; the detail view lists them all.
@@ -286,7 +284,10 @@ async function renderHome() {
 
   view.innerHTML = `
     <section class="hero">
-      <div class="hero-art" style="background:${artBg(featured.title)}"><div class="hero-title-art" aria-hidden="true">${esc(featured.title)}</div></div>
+      <div class="hero-art" style="background:${artBg(featured.title)}">${featured.poster_url
+        ? `<img class="hero-bg-img" src="${esc(featured.poster_url)}" alt="" onerror="this.remove()">`
+        : `<div class="hero-title-art" aria-hidden="true">${esc(featured.title)}</div>`}</div>
+      ${featured.poster_url ? `<button class="hero-poster" data-movie="${featured.id}" aria-label="${esc(featured.title)} details">${poster(featured)}</button>` : ''}
       <div class="hero-content">
         <div class="hero-eyebrow">Featured presentation</div>
         <h1>${esc(featured.title)}</h1>
@@ -294,7 +295,7 @@ async function renderHome() {
           ${nextShow ? `<span class="dot"></span><span>Next: ${dayLabel(nextShow.starts_at)} ${fmtTime(nextShow.starts_at)} · ${esc(nextShow.hall_name)}</span>${xpBadge(nextShow.experience)}` : ''}</div>
         <p>${esc(featured.description)}</p>
         <div class="hero-actions">
-          <a class="btn btn-gold btn-lg" href="#/movie/${featured.id}/tickets">▶&nbsp; Get tickets</a>
+          ${nextShow ? `<a class="btn btn-gold btn-lg" href="#/movie/${featured.id}/tickets">▶&nbsp; Get tickets</a>` : ''}
           <button class="btn btn-ghost btn-lg" data-movie="${featured.id}">ⓘ&nbsp; More info</button>
         </div>
       </div>
@@ -306,7 +307,10 @@ async function renderHome() {
       <section class="row browse" aria-labelledby="browse-title">
         <h2 id="browse-title">Browse by genre</h2>
         <div class="browse-controls">
-          <input type="search" id="browse-q" placeholder="Search titles" aria-label="Search titles">
+          <div class="browse-search">
+            <input type="search" id="browse-q" placeholder="Search titles" aria-label="Search titles">
+            <button class="btn btn-gold" id="browse-random" title="Picks from the films shown below">🎲&nbsp; Pick me a random movie</button>
+          </div>
           <div class="xp-filter" role="tablist" aria-label="Genre" id="genre-pills"></div>
         </div>
         <div class="browse-grid" id="browse-grid" aria-live="polite"></div>
@@ -316,11 +320,24 @@ async function renderHome() {
   // One genre at a time (plus an optional title search) instead of a row per genre.
   if (!['All', ...genres].includes(state.browseGenre)) state.browseGenre = 'All';
   const grid = view.querySelector('#browse-grid');
-  const drawBrowse = () => {
+  const browseList = () => {
     const q = view.querySelector('#browse-q').value.trim().toLowerCase();
-    const list = movies.data.filter((m) => (state.browseGenre === 'All' || m.genres.includes(state.browseGenre))
+    return movies.data.filter((m) => (state.browseGenre === 'All' || m.genres.includes(state.browseGenre))
       && (!q || m.title.toLowerCase().includes(q)));
+  };
+  const drawBrowse = () => {
+    const list = browseList();
     grid.innerHTML = list.map(card).join('') || '<div class="empty"><strong>No films match</strong>Try another genre or search.</div>';
+    view.querySelector('#browse-random').disabled = !list.length;
+  };
+  // Random pick from whatever the genre/search currently shows; avoids repeating the last pick when there's a choice.
+  view.querySelector('#browse-random').onclick = () => {
+    const list = browseList();
+    const pool = list.length > 1 ? list.filter((m) => m.id !== state.lastRandom) : list;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    if (!pick) return;
+    state.lastRandom = pick.id;
+    location.hash = `#/movie/${pick.id}`;
   };
   // The 10 most common genres are buttons; the rest sit behind "+N more" so the list stays short as films are added.
   const count = (g) => movies.data.filter((m) => m.genres.includes(g)).length;
