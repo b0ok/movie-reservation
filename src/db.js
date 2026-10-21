@@ -138,6 +138,23 @@ export const MIGRATIONS = [
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   `,
+  // 6: snack combos added at checkout; the price is copied in so later price changes don't rewrite old orders.
+  `
+  CREATE TABLE reservation_snacks (
+    reservation_id INTEGER NOT NULL REFERENCES reservations(id) ON DELETE CASCADE,
+    combo          TEXT NOT NULL,
+    qty            INTEGER NOT NULL CHECK (qty > 0),
+    price_cents    INTEGER NOT NULL CHECK (price_cents >= 0),
+    PRIMARY KEY (reservation_id, combo)
+  );
+  `,
+  // 7: small key/value store for server bookkeeping (e.g. when the demo account was last reset).
+  `
+  CREATE TABLE app_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  `,
 ];
 
 function migrate(db) {
