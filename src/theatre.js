@@ -10,6 +10,14 @@ export const TICKET_TYPES = {
   senior: { label: 'Senior (65+)', discount_cents: 300 },
 };
 
+// Wombo Combo snack deals offered at checkout. `party` is the group size each combo suits, used to recommend one.
+export const SNACK_COMBOS = {
+  solo: { label: 'Solo Combo', items: 'Medium popcorn + medium drink', price_cents: 1149, party: 1 },
+  wombo: { label: 'Wombo Combo', items: 'Large popcorn, 2 large drinks + candy', price_cents: 1899, party: 2 },
+  family: { label: 'Mega Wombo Combo', items: '2 large popcorns, 4 drinks + 2 candies', price_cents: 3299, party: 4 },
+};
+export const MAX_COMBO_QTY = 10;
+
 // Ticket types on sale for a showtime; age-restricted experiences (VIP is 19+) don't sell child tickets.
 export function ticketPrices(priceCents, minAge = 0) {
   return Object.entries(TICKET_TYPES)

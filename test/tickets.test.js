@@ -95,6 +95,39 @@ test('ticket types are priced per seat and must match the seat count', async () 
   assert.equal(plain.body.total_cents, 3000);
 });
 
+test('snack combos are priced by the server and added to the total', async () => {
+  const combos = (await api('GET', '/api/theatre')).body.snack_combos;
+  const wombo = combos.find((c) => c.id === 'wombo');
+  assert.ok(wombo && wombo.price_cents > 0);
+  const show = (await schedule(at(6, 15, 0))).body;
+
+  const r = await api('POST', '/api/reservations', {
+    token: user, body: { showtime_id: show.id, seats: ['A1', 'A2'], snacks: { wombo: 2 } },
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.total_cents, 2 * 1500 + 2 * wombo.price_cents);
+  assert.deepEqual(r.body.snacks.map((s) => [s.combo, s.qty, s.label]), [['wombo', 2, wombo.label]]);
+  assert.deepEqual((await api('GET', `/api/reservations/${r.body.id}`, { token: user })).body.snacks.length, 1);
+
+  for (const snacks of [{ caviar: 1 }, { wombo: 11 }, { wombo: -1 }, { wombo: '1' }, ['wombo']]) {
+    const bad = await api('POST', '/api/reservations', { token: user, body: { showtime_id: show.id, seats: ['B1'], snacks } });
+    assert.equal(bad.status, 400, JSON.stringify(snacks));
+  }
+  // A rejected order must not have reserved the seat.
+  assert.equal((await api('POST', '/api/reservations', { token: user, body: { showtime_id: show.id, seats: ['B1'] } })).status, 201);
+});
+
+test('each booking has a signed ticket code and a QR for its pass', async () => {
+  const show = (await schedule(at(7, 15, 0))).body;
+  const a = (await api('POST', '/api/reservations', { token: user, body: { showtime_id: show.id, seats: ['A1'] } })).body;
+  const b = (await api('POST', '/api/reservations', { token: user, body: { showtime_id: show.id, seats: ['A2'] } })).body;
+  assert.match(a.ticket_code, new RegExp(`^NAT-${a.id}-[0-9A-F]{8}$`));
+  assert.notEqual(a.ticket_code.split('-')[2], b.ticket_code.split('-')[2]);
+  const pass = (await api('GET', `/api/reservations/${a.id}`, { token: user })).body;
+  assert.equal(pass.ticket_code, a.ticket_code); // stable across reads
+  assert.match(pass.qr_svg, /^<svg[\s\S]*<\/svg>$/);
+});
+
 test('VIP is 19+: no child tickets', async () => {
   const show = (await schedule(at(5, 19, 0), { experience_id: vipId })).body;
   const detail = (await api('GET', `/api/showtimes/${show.id}`)).body;

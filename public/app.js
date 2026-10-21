@@ -121,27 +121,38 @@ function signOut(rerender = true) {
 }
 
 // Opens the sign in / sign up dialog; onSuccess runs after a successful login.
-function openAuth(mode = 'login', onSuccess) {
-  const isLogin = mode === 'login';
+// Sign-in only: this is a portfolio demo, so the demo customer login is shown and sign-up is a placeholder.
+async function openAuth(_mode, onSuccess) {
+  const demo = (await theatreInfo()).demo_login;
   openModal(`
     <div class="auth">
       <span class="brand-mark">N</span>
-      <h2>${isLogin ? 'Welcome back' : 'Join the theatre'}</h2>
-      <p>${isLogin ? 'Sign in to reserve seats and see your tickets.' : 'Create an account to start reserving seats.'}</p>
+      <h2>Welcome back</h2>
+      <p>Sign in to reserve seats and see your tickets.</p>
+      ${demo ? `<div class="demo-login">
+        <b>Just exploring? Use this login</b>
+        <dl><dt>Email</dt><dd><code>${esc(demo.email)}</code></dd><dt>Password</dt><dd><code>${esc(demo.password)}</code></dd></dl>
+        <button type="button" class="btn btn-line btn-sm" id="demo-fill">Use demo login</button>
+      </div>` : ''}
       <form id="auth-form" novalidate>
-        ${isLogin ? '' : `<div class="field"><label for="auth-name">Name</label><input id="auth-name" name="name" autocomplete="name" required></div>`}
         <div class="field"><label for="auth-email">Email</label><input id="auth-email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" autocomplete="${isLogin ? 'current-password' : 'new-password'}" minlength="8" required>
-          ${isLogin ? '' : '<span class="hint">At least 8 characters.</span>'}</div>
+        <div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" autocomplete="current-password" required></div>
         <div class="form-error" id="auth-error"></div>
-        <button class="btn btn-gold btn-lg" type="submit">${isLogin ? 'Sign in' : 'Create account'}</button>
+        <button class="btn btn-gold btn-lg" type="submit">Sign in</button>
       </form>
-      <div class="auth-switch">${isLogin ? 'New here?' : 'Already have an account?'}
-        <button class="link-btn" id="auth-switch">${isLogin ? 'Create an account' : 'Sign in'}</button></div>
+      <div class="auth-switch">New here?
+        <button class="link-btn" id="auth-switch">Create an account</button></div>
+      <p class="hint auth-closed" id="auth-closed" hidden>Sign-ups are closed in this demo. Use the demo login above.</p>
     </div>`, { narrow: true });
 
-  modalRoot.querySelector('#auth-switch').onclick = () => openAuth(isLogin ? 'signup' : 'login', onSuccess);
+  // Placeholder only: sign-up isn't offered in the demo.
+  modalRoot.querySelector('#auth-switch').onclick = () => { modalRoot.querySelector('#auth-closed').hidden = false; };
   const form = modalRoot.querySelector('#auth-form');
+  modalRoot.querySelector('#demo-fill')?.addEventListener('click', () => {
+    form.querySelector('#auth-email').value = demo.email;
+    form.querySelector('#auth-password').value = demo.password;
+    form.requestSubmit();
+  });
   form.querySelector('input').focus();
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -149,13 +160,13 @@ function openAuth(mode = 'login', onSuccess) {
     const body = Object.fromEntries(new FormData(form));
     btn.disabled = true;
     try {
-      const { token, user } = await api('POST', isLogin ? '/api/auth/login' : '/api/auth/signup', body);
+      const { token, user } = await api('POST', '/api/auth/login', body);
       state.token = token;
       state.user = user;
       writeToken(token);
       closeModal();
       renderNav();
-      toast(isLogin ? `Welcome back, ${user.name}` : `Welcome to the theatre, ${user.name}`, 'ok');
+      toast(`Welcome back, ${user.name}`, 'ok');
       if (onSuccess) onSuccess(); else render();
     } catch (err) {
       form.querySelector('#auth-error').textContent = errorText(err);
@@ -566,22 +577,26 @@ const MAX_TICKETS = 10;
 // ---------- booking flow: Tickets → Seats → Review → Confirmed ----------
 
 async function renderBooking(id) {
-  const [show, seatMap] = await Promise.all([api('GET', `/api/showtimes/${id}`), api('GET', `/api/showtimes/${id}/seats`)]);
+  const [show, seatMap, theatre] = await Promise.all([api('GET', `/api/showtimes/${id}`), api('GET', `/api/showtimes/${id}/seats`), theatreInfo()]);
   // Keep choices when moving between steps of the same showtime. Switching to another time (e.g. from
   // "Better seats here") carries the ticket counts over and goes straight to seat selection.
   if (state.booking?.id !== show.id) {
     const carry = state.booking?.show?.movie_id === show.movie_id ? state.booking.counts : {};
     const counts = Object.fromEntries(show.ticket_prices.map((t) => [t.type, carry[t.type] || 0]));
     const carried = Object.values(counts).reduce((a, n) => a + n, 0);
-    state.booking = { id: show.id, step: carried && carried <= show.available ? 'seats' : 'tickets', counts, seats: [] };
+    state.booking = { id: show.id, step: carried && carried <= show.available ? 'seats' : 'tickets', counts, seats: [], snacks: {} };
   }
   const b = state.booking;
   b.show = show;
   b.seatMap = seatMap;
+  b.combos = theatre.snack_combos || [];
+  b.snacks ||= {};
   drawBooking();
 }
 
 const ticketTotal = (b) => b.show.ticket_prices.reduce((sum, t) => sum + (b.counts[t.type] || 0) * t.price_cents, 0);
+const snackTotal = (b) => b.combos.reduce((sum, c) => sum + (b.snacks[c.id] || 0) * c.price_cents, 0);
+const orderTotal = (b) => ticketTotal(b) + snackTotal(b);
 const ticketCount = (b) => Object.values(b.counts).reduce((a, n) => a + n, 0);
 
 function drawBooking() {
@@ -623,13 +638,15 @@ function goStep(step) {
 function drawSummary({ action, enabled, onAction, back }) {
   const b = state.booking;
   const lines = b.show.ticket_prices.filter((t) => b.counts[t.type]).map((t) =>
-    `<div class="line"><span>${b.counts[t.type]} × ${esc(t.label)}</span><b>${money(b.counts[t.type] * t.price_cents)}</b></div>`).join('');
+    `<div class="line"><span>${b.counts[t.type]} × ${esc(t.label)}</span><b>${money(b.counts[t.type] * t.price_cents)}</b></div>`).join('')
+    + b.combos.filter((c) => b.snacks[c.id]).map((c) =>
+      `<div class="line"><span>${b.snacks[c.id]} × ${esc(c.label)}</span><b>${money(b.snacks[c.id] * c.price_cents)}</b></div>`).join('');
   const box = view.querySelector('#book-summary');
   box.innerHTML = `
     <h3>Order summary</h3>
     <div class="sum-lines">${lines || '<span class="hint">No tickets yet</span>'}
       ${b.seats.length ? `<div class="line"><span>Seats</span><b>${b.seats.slice().sort(seatSort).join(', ')}</b></div>` : ''}</div>
-    <div class="line total"><span>Total</span><b>${money(ticketTotal(b))}</b></div>
+    <div class="line total"><span>Total</span><b>${money(orderTotal(b))}</b></div>
     <div class="sum-actions">
       ${back ? `<button class="btn btn-line" id="sum-back">Back</button>` : ''}
       ${action ? `<button class="btn btn-gold" id="sum-next" ${enabled ? '' : 'disabled'}>${action}</button>` : ''}
@@ -782,15 +799,51 @@ function stepReview() {
       <div class="review-row"><span>Seats</span><div class="chips">${b.seats.slice().sort(seatSort).map((s) => `<span class="chip">${s}</span>`).join('')}</div></div>
       <div class="review-row"><span>Tickets</span><b>${show.ticket_prices.filter((t) => b.counts[t.type]).map((t) => `${b.counts[t.type]} ${esc(t.label)}`).join(', ')}</b></div>
     </div>
-    <p class="hint">Pay at the box office or kiosk when you arrive. You can cancel from My Tickets any time before the show starts.</p>
-    ${state.user ? `<p class="hint">Booking as <b>${esc(state.user.email)}</b></p>` : '<div class="signin-box"><b>Sign in to finish your booking</b><span class="hint">Your seats and tickets will be kept.</span></div>'}`;
+    ${b.combos.length ? '<section class="combo-upsell" id="combo-upsell" aria-labelledby="combo-title"></section>' : ''}
+    <p class="hint">Pay at the box office or kiosk when you arrive. Snacks are ready at the concession pickup counter. You can cancel from My Tickets any time before the show starts.</p>
+    ${state.user ? `<p class="hint">Booking as <b>${esc(state.user.email)}</b></p>` : '<div class="signin-box"><b>Sign in to finish your booking</b><span class="hint">Your seats, tickets and snacks will be kept.</span></div>'}`;
+
+  // Wombo Combo upsell: one combo is recommended for the party size (1 → Solo, 2–3 → Wombo, 4+ → Mega).
+  const party = ticketCount(b);
+  const recommended = [...b.combos].sort((x, y) => y.party - x.party).find((c) => c.party <= party)?.id;
+  const drawCombos = () => {
+    const box = main.querySelector('#combo-upsell');
+    if (!box) return;
+    box.innerHTML = `
+      <div class="combo-head">
+        <span class="combo-eyebrow">🍿 Wombo Combo deals</span>
+        <h3 id="combo-title">Make it a movie night</h3>
+        <p class="hint">Add snacks now and skip the line. Pickup at the concession counter.</p>
+      </div>
+      <div class="combo-grid">${b.combos.map((c) => {
+        const qty = b.snacks[c.id] || 0;
+        return `<article class="combo ${qty ? 'added' : ''} ${c.id === recommended ? 'recommended' : ''}">
+          ${c.id === recommended ? `<span class="combo-flag">Best for ${party === 1 ? '1 person' : `your party of ${party}`}</span>` : ''}
+          <b class="combo-name">${esc(c.label)}</b>
+          <span class="combo-items">${esc(c.items)}</span>
+          <div class="combo-foot">
+            <span class="combo-price">${money(c.price_cents)}</span>
+            ${qty ? `<div class="stepper-ctl">
+                <button class="qty" data-snack-minus="${c.id}" aria-label="Remove one ${esc(c.label)}">−</button>
+                <output aria-live="polite">${qty}</output>
+                <button class="qty" data-snack-plus="${c.id}" aria-label="Add another ${esc(c.label)}" ${qty >= 10 ? 'disabled' : ''}>+</button>
+              </div>`
+              : `<button class="btn ${c.id === recommended ? 'btn-gold' : 'btn-line'} btn-sm" data-snack-plus="${c.id}">Add</button>`}
+          </div>
+        </article>`;
+      }).join('')}</div>`;
+    box.querySelectorAll('[data-snack-plus]').forEach((x) => { x.onclick = () => { b.snacks[x.dataset.snackPlus] = (b.snacks[x.dataset.snackPlus] || 0) + 1; redraw(); }; });
+    box.querySelectorAll('[data-snack-minus]').forEach((x) => {
+      x.onclick = () => { const k = x.dataset.snackMinus; b.snacks[k] = Math.max(0, (b.snacks[k] || 0) - 1); if (!b.snacks[k]) delete b.snacks[k]; redraw(); };
+    });
+  };
 
   const reserve = () => requireLogin(async () => {
     const btn = view.querySelector('#sum-next');
     if (btn) btn.disabled = true;
     try {
       const tickets = Object.fromEntries(Object.entries(b.counts).filter(([, n]) => n > 0));
-      b.result = await api('POST', '/api/reservations', { showtime_id: show.id, seats: b.seats, tickets });
+      b.result = await api('POST', '/api/reservations', { showtime_id: show.id, seats: b.seats, tickets, snacks: b.snacks });
       goStep('done');
     } catch (err) {
       toast(errorText(err), 'error');
@@ -803,7 +856,11 @@ function stepReview() {
       } else if (btn) btn.disabled = false;
     }
   });
-  drawSummary({ action: state.user ? `Reserve · ${money(ticketTotal(b))}` : 'Sign in to reserve', enabled: true, onAction: reserve, back: 'seats' });
+  const redraw = () => {
+    drawCombos();
+    drawSummary({ action: state.user ? `Reserve · ${money(orderTotal(b))}` : 'Sign in to reserve', enabled: true, onAction: reserve, back: 'seats' });
+  };
+  redraw();
 }
 
 function stepDone() {
@@ -811,16 +868,53 @@ function stepDone() {
   const r = b.result;
   if (!r) return goStep('tickets');
   view.querySelector('#book-main').innerHTML = `
-    <div class="confirmed">
+    <div class="booked">
       <div class="confirmed-mark" aria-hidden="true">✓</div>
       <h2>You're booked!</h2>
       <p>Booking <b>#${r.id}</b> · ${esc(r.movie_title)} · ${fmtLong(r.starts_at)} at ${fmtTime(r.starts_at)}</p>
       <div class="chips">${r.seats.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}</div>
-      <p class="hint">${(r.tickets || []).map((t) => `${t.count} × ${esc(t.label)}`).join(' · ')} · Total ${money(r.total_cents)}</p>
-      <div class="hero-actions"><a class="btn btn-gold" href="#/tickets">View my tickets</a><a class="btn btn-line" href="#/">Back to films</a></div>
+      <p class="hint">${[...(r.tickets || []).map((t) => `${t.count} × ${esc(t.label)}`), ...(r.snacks || []).map((s) => `🍿 ${s.qty} × ${esc(s.label)}`)].join(' · ')} · Total ${money(r.total_cents)}</p>
+      <div class="hero-actions"><button class="btn btn-gold" id="done-pass">Show ticket</button><a class="btn btn-line" href="#/tickets">My tickets</a><a class="btn btn-line" href="#/">Back to films</a></div>
     </div>`;
+  view.querySelector('#done-pass').onclick = () => openTicketPass(r.id);
   view.querySelector('#book-summary').hidden = true;
   state.booking = null;
+}
+
+// The scannable ticket pass: what a guest shows at the door. The QR holds the signed ticket code.
+async function openTicketPass(id) {
+  let r;
+  try { r = await api('GET', `/api/reservations/${id}`); } catch (err) { return toast(errorText(err), 'error'); }
+  const admits = r.seats.length;
+  const lines = [
+    ...(r.tickets || []).map((t) => [`${t.count} × ${esc(t.label)}`, t.count * t.price_cents]),
+    ...(r.snacks || []).map((s) => [`🍿 ${s.qty} × ${esc(s.label)}`, s.qty * s.price_cents]),
+  ];
+  openModal(`
+    <article class="pass" aria-label="Ticket for ${esc(r.movie_title)}">
+      <header class="pass-head">
+        <span class="brand-mark">N</span>
+        <div><b>The Nguyen Awards Theatre</b><span>Admit ${admits} · ${xpBadge(r.experience, true)}</span></div>
+      </header>
+      <div class="pass-film">
+        ${poster({ title: r.movie_title, poster_url: r.poster_url })}
+        <div><h2>${esc(r.movie_title)}</h2><div class="pass-when">${fmtLong(r.starts_at)}<b>${fmtTime(r.starts_at)}</b></div></div>
+      </div>
+      <dl class="pass-grid">
+        <div><dt>Hall</dt><dd>${esc(r.hall_name)}</dd></div>
+        <div><dt>Seats</dt><dd>${r.seats.slice().sort(seatSort).map(esc).join(', ')}</dd></div>
+        <div><dt>Booking</dt><dd>#${r.id}</dd></div>
+      </dl>
+      <div class="pass-tear" aria-hidden="true"></div>
+      <div class="pass-scan">
+        <div class="pass-qr" role="img" aria-label="QR code for ticket ${esc(r.ticket_code)}">${r.qr_svg}</div>
+        <code class="pass-code">${esc(r.ticket_code)}</code>
+        <p class="hint">Show this at the door to be scanned in.${r.snacks?.length ? ' Use the same code at the concession counter for your snacks.' : ''}</p>
+      </div>
+      <ul class="ticket-lines pass-lines">${lines.map(([label, cents]) => `<li><span>${label}</span><b>${money(cents)}</b></li>`).join('')}
+        <li class="pass-total"><span>Total, pay at the box office</span><b>${money(r.total_cents)}</b></li></ul>
+      ${r.status === 'cancelled' ? '<p class="pass-void">Cancelled: this ticket is no longer valid</p>' : ''}
+    </article>`, { narrow: true });
 }
 
 // Compares best-view availability across this film's other times nearby, and points to any that beat this one.
@@ -941,19 +1035,30 @@ async function renderTickets() {
         const past = r.starts_at <= now;
         const statusClass = r.status === 'cancelled' ? 'cancelled' : past ? 'past' : 'confirmed';
         const statusText = r.status === 'cancelled' ? 'Cancelled' : past ? 'Attended' : 'Confirmed';
-        return `<article class="ticket ${r.status === 'cancelled' ? 'is-cancelled' : ''}">
-          ${poster({ title: r.movie_title, poster_url: r.poster_url })}
+        // Itemized like a receipt: ticket types, then snack combos.
+        const lines = [
+          ...(r.tickets || []).map((t) => [`${t.count} × ${esc(t.label)}`, t.count * t.price_cents]),
+          ...(r.snacks || []).map((s) => [`🍿 ${s.qty} × ${esc(s.label)}`, s.qty * s.price_cents]),
+        ];
+        const soon = r.status === 'confirmed' && !past && ['Today', 'Tomorrow'].includes(dayLabel(r.starts_at));
+        return `<article class="ticket is-${statusClass}">
+          <a class="ticket-poster" href="#/movie/${r.movie_id}" aria-label="${esc(r.movie_title)}">${poster({ title: r.movie_title, poster_url: r.poster_url })}</a>
           <div class="ticket-body">
-            <h3>${esc(r.movie_title)}</h3>
-            <div class="ticket-when">${fmtLong(r.starts_at)} · ${fmtTime(r.starts_at)}</div>
-            <div class="ticket-where">${xpBadge(r.experience, true)} ${esc(r.hall_name)} · Booking #${r.id}</div>
-            <div class="chips">${r.seats.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}</div>
-            ${r.tickets ? `<div class="hint">${r.tickets.map((t) => `${t.count} × ${esc(t.label)}`).join(' · ')}</div>` : ''}
-            <div class="ticket-foot">
+            <header class="ticket-top">
+              <div class="ticket-heading">
+                <h3>${esc(r.movie_title)}</h3>
+                <div class="ticket-when">${soon ? `<span class="ticket-soon">${dayLabel(r.starts_at)}</span>` : ''}${fmtLong(r.starts_at)} · ${fmtTime(r.starts_at)}</div>
+              </div>
               <span class="status ${statusClass}">${statusText}</span>
-              <b>${money(r.total_cents)}</b>
-              ${r.status === 'confirmed' && !past ? `<span class="confirm-row" data-cancel-wrap="${r.id}"><button class="btn btn-danger btn-sm" data-cancel="${r.id}">Cancel</button></span>` : ''}
-            </div>
+            </header>
+            <div class="ticket-where">${xpBadge(r.experience, true)}<span>${esc(r.hall_name)}</span></div>
+            <div class="ticket-seats"><span class="ticket-label">Seats</span><div class="chips">${r.seats.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}</div></div>
+            ${lines.length ? `<ul class="ticket-lines">${lines.map(([label, cents]) => `<li><span>${label}</span><b>${money(cents)}</b></li>`).join('')}</ul>` : ''}
+            <footer class="ticket-foot">
+              <span class="ticket-ref">Booking #${r.id}</span>
+              <span class="ticket-total">Total <b>${money(r.total_cents)}</b></span>
+              ${r.status === 'confirmed' && !past ? `<span class="confirm-row" data-cancel-wrap="${r.id}"><button class="btn btn-line btn-sm ticket-cancel" data-cancel="${r.id}">Cancel booking</button><button class="btn btn-gold btn-sm" data-pass="${r.id}">Show ticket</button></span>` : ''}
+            </footer>
           </div></article>`;
       }).join('')}</div>`
       : `<div class="empty"><strong>${state.ticketScope === 'upcoming' ? 'No upcoming tickets' : 'Nothing here yet'}</strong>
@@ -961,6 +1066,7 @@ async function renderTickets() {
     </div>`;
 
   view.querySelectorAll('[data-scope]').forEach((b) => { b.onclick = () => { state.ticketScope = b.dataset.scope; renderTickets(); }; });
+  view.querySelectorAll('[data-pass]').forEach((b) => { b.onclick = () => openTicketPass(b.dataset.pass); });
   view.querySelectorAll('[data-cancel]').forEach((b) => {
     b.onclick = () => {
       const wrap = view.querySelector(`[data-cancel-wrap="${b.dataset.cancel}"]`);

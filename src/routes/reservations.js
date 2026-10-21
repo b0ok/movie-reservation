@@ -1,8 +1,10 @@
 import { Router } from 'express';
+import { createHmac } from 'node:crypto';
+import qrcode from 'qrcode-generator';
 import { validate, parseId } from '../validate.js';
 import { notFound, conflict, badRequest, HttpError } from '../errors.js';
 import { transaction } from '../db.js';
-import { TICKET_TYPES, ticketPrices } from '../theatre.js';
+import { TICKET_TYPES, ticketPrices, SNACK_COMBOS, MAX_COMBO_QTY } from '../theatre.js';
 
 export const MAX_SEATS_PER_RESERVATION = 10;
 
@@ -14,26 +16,50 @@ const RESERVATION_SELECT = `
             JOIN seats se ON se.id = rs.seat_id WHERE rs.reservation_id = r.id) AS seat_labels,
          (SELECT json_group_array(json_object('type', ticket_type, 'count', n, 'price_cents', p)) FROM (
             SELECT ticket_type, COUNT(*) AS n, price_cents AS p FROM reservation_seats
-            WHERE reservation_id = r.id GROUP BY ticket_type, price_cents)) AS tickets_json
+            WHERE reservation_id = r.id GROUP BY ticket_type, price_cents)) AS tickets_json,
+         (SELECT json_group_array(json_object('combo', combo, 'qty', qty, 'price_cents', price_cents))
+            FROM reservation_snacks WHERE reservation_id = r.id) AS snacks_json
   FROM reservations r
   JOIN showtimes s ON s.id = r.showtime_id
   JOIN movies m ON m.id = s.movie_id
   JOIN halls h ON h.id = s.hall_id
   JOIN experiences e ON e.id = s.experience_id`;
 
+// The code printed on a ticket and in its QR: booking id plus a short HMAC, so a scanner can tell a real
+// ticket from a guessed one without a lookup table. Keyed by JWT_SECRET; changing the secret changes every code.
+export function ticketCode(id) {
+  const sig = createHmac('sha256', process.env.JWT_SECRET || '').update(`ticket:${id}`).digest('hex').slice(0, 8).toUpperCase();
+  return `NAT-${id}-${sig}`;
+}
+
+export function ticketQrSvg(code) {
+  const qr = qrcode(0, 'M');
+  qr.addData(code);
+  qr.make();
+  return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+}
+
 export function formatReservation(row) {
   if (!row) return row;
-  const { seat_labels, tickets_json, ...rest } = row;
+  const { seat_labels, tickets_json, snacks_json, ...rest } = row;
   const out = { ...rest, seats: seat_labels ? seat_labels.split(',') : [] };
   if (tickets_json) {
     out.tickets = JSON.parse(tickets_json).map((t) => ({ ...t, label: TICKET_TYPES[t.type]?.label ?? t.type }));
   }
+  out.snacks = snacks_json ? JSON.parse(snacks_json).map((s) => ({ ...s, label: SNACK_COMBOS[s.combo]?.label ?? s.combo })) : [];
+  out.ticket_code = ticketCode(out.id);
   return out;
 }
 
 // Books seats (by label) for a user inside one write transaction. Used by the API and the demand simulator.
 // tickets is { adult, child, senior } counts that must add up to the number of seats; omitted means all adult.
-export function createReservation(db, userId, showtimeId, labels, tickets = { adult: labels.length }) {
+// snacks is { comboId: qty }; prices come from SNACK_COMBOS and are added to the total.
+export function createReservation(db, userId, showtimeId, labels, tickets = { adult: labels.length }, snacks = {}) {
+  for (const [combo, qty] of Object.entries(snacks)) {
+    if (!SNACK_COMBOS[combo]) throw badRequest(`Unknown snack combo: ${combo}`);
+    if (!Number.isInteger(qty) || qty < 1 || qty > MAX_COMBO_QTY) throw badRequest(`Snack quantity must be 1 to ${MAX_COMBO_QTY}`);
+  }
+  const snackCents = Object.entries(snacks).reduce((sum, [combo, qty]) => sum + SNACK_COMBOS[combo].price_cents * qty, 0);
   return transaction(db, () => {
     const st = db.prepare(`SELECT s.id, s.hall_id, s.starts_at, s.price_cents, e.min_age
       FROM showtimes s JOIN experiences e ON e.id = s.experience_id WHERE s.id = ?`).get(showtimeId);
@@ -67,7 +93,9 @@ export function createReservation(db, userId, showtimeId, labels, tickets = { ad
 
     const { lastInsertRowid } = db.prepare(
       'INSERT INTO reservations (user_id, showtime_id, total_cents) VALUES (?, ?, ?)',
-    ).run(userId, st.id, perSeat.reduce((sum, type) => sum + prices[type], 0));
+    ).run(userId, st.id, perSeat.reduce((sum, type) => sum + prices[type], 0) + snackCents);
+    const insertSnack = db.prepare('INSERT INTO reservation_snacks (reservation_id, combo, qty, price_cents) VALUES (?, ?, ?, ?)');
+    for (const [combo, qty] of Object.entries(snacks)) insertSnack.run(lastInsertRowid, combo, qty, SNACK_COMBOS[combo].price_cents);
     const insertSeat = db.prepare(`INSERT INTO reservation_seats (reservation_id, showtime_id, seat_id, ticket_type, price_cents)
                                    VALUES (?, ?, ?, ?, ?)`);
     try {
@@ -109,8 +137,14 @@ export default function reservationRoutes(db) {
       }
       tickets = Object.fromEntries(Object.entries(t).filter(([, n]) => n > 0));
     }
+    let snacks = {};
+    if (req.body.snacks !== undefined) {
+      const s = req.body.snacks;
+      if (!s || typeof s !== 'object' || Array.isArray(s)) throw badRequest('snacks must be an object of counts, e.g. { "wombo": 1 }');
+      snacks = Object.fromEntries(Object.entries(s).filter(([, n]) => n !== 0));
+    }
 
-    const id = createReservation(db, req.user.id, input.showtime_id, labels, tickets);
+    const id = createReservation(db, req.user.id, input.showtime_id, labels, tickets, snacks);
     res.status(201).json(formatReservation(getReservation.get(id)));
   });
 
@@ -126,8 +160,10 @@ export default function reservationRoutes(db) {
     res.json(rows.map(formatReservation));
   });
 
+  // Single reservation, with the QR code for its ticket pass.
   router.get('/:id', (req, res) => {
-    res.json(formatReservation(loadOwned(req)));
+    const r = formatReservation(loadOwned(req));
+    res.json({ ...r, qr_svg: ticketQrSvg(r.ticket_code) });
   });
 
   // Cancel: only upcoming, confirmed reservations. Frees the seats immediately.

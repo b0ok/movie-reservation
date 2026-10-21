@@ -14,7 +14,7 @@ npm start                 # http://localhost:3000
 npm test
 ```
 
-On startup, if no admin exists, one is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Public signup always creates a regular `user`. Admins can promote other users.
+On startup, if no admin exists, one is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD`. If `DEMO_EMAIL` / `DEMO_PASSWORD` are set, a regular (non-admin) demo customer account is kept in sync with them and its login is shown on the sign-in screen; the site's "Create an account" link is a placeholder for the portfolio demo. Because every visitor shares that account, its bookings are deleted once a day at `DEMO_RESET_HOUR` (default 4 AM, theatre time zone); the last reset date is stored in the database, so restarts never reset twice and a server that slept through the hour catches up when it wakes. Public signup always creates a regular `user`. Admins can promote other users.
 
 ## Data model
 
@@ -101,7 +101,7 @@ All bodies are JSON. Authenticated routes need `Authorization: Bearer <token>`. 
 ### Reservations (user)
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/reservations` | `{ showtime_id, seats: ["A1","A2"] }`, max 10 seats, upcoming showtimes only. `409` lists seats that are already taken |
+| POST | `/api/reservations` | `{ showtime_id, seats: ["A1","A2"], tickets?: { adult: 1, child: 1 }, snacks?: { wombo: 1 } }`, max 10 seats, upcoming showtimes only. Snack combos (`solo`, `wombo`, `family`, see `GET /api/theatre`) are priced by the server and added to `total_cents`. `409` lists seats that are already taken |
 | GET | `/api/reservations` | your reservations; `?scope=upcoming` (default) \| `past` \| `all` |
 | GET | `/api/reservations/:id` | |
 | DELETE | `/api/reservations/:id` | cancel (upcoming only); seats are released immediately |
