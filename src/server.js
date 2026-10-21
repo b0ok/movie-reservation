@@ -9,6 +9,11 @@ if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET must be set (copy .env.example to .env)');
   process.exit(1);
 }
+// The example secret is public in the repo, so anyone could forge an admin token with it.
+if (process.env.JWT_SECRET === 'change-me-to-a-long-random-string' || process.env.JWT_SECRET.length < 32) {
+  console.error('JWT_SECRET is the example value or too short; set a long random one (see .env.example)');
+  process.exit(1);
+}
 
 const db = openDb();
 ensureAdmin(db);

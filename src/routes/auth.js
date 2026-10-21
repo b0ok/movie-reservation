@@ -35,7 +35,9 @@ export default function authRoutes(db, { auth }) {
   const getUser = db.prepare('SELECT id, name, email, role, created_at FROM users WHERE id = ?');
 
   // Signup always creates a regular user; admins are seeded or promoted by another admin.
+  // Closed unless ALLOW_SIGNUP=true: the portfolio site only uses the shared demo login.
   router.post('/signup', async (req, res) => {
+    if (process.env.ALLOW_SIGNUP !== 'true') throw new HttpError(403, 'Sign-up is closed');
     const input = validate(req.body, {
       name: { type: 'string', required: true, min: 1, max: 100 },
       email: { type: 'string', required: true, max: 254, pattern: EMAIL },

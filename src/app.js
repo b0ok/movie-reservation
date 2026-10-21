@@ -40,6 +40,19 @@ export function createApp(db, { uploadDir = process.env.UPLOAD_DIR || fileURLToP
   const app = express();
   const auth = requireAuth(db);
 
+  app.disable('x-powered-by');
+  // Scripts only from this origin (no inline handlers), no framing; posters may be any http(s) image.
+  app.use((_req, res, next) => {
+    res.set({
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        + "font-src https://fonts.gstatic.com; img-src 'self' https: http: data:; object-src 'none'; base-uri 'self'; "
+        + "form-action 'self'; frame-ancestors 'none'",
+      'X-Frame-Options': 'DENY',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+    });
+    next();
+  });
   app.use(express.json({ limit: '100kb' }));
   // The website is a static single-page app served from the same origin as the API.
   app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
